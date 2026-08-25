@@ -106,6 +106,26 @@ python cli.py --input <folder> --output <folder> [--canvas-size 1600] [--margin 
 - At the end of a run, the CLI prints a summary: total files, processed
   successfully, count needing review (with filenames), count skipped.
 
+## Post-implementation notes
+
+Three refinements were made during implementation and verification (see
+`docs/superpowers/plans/2026-08-25-gem-photo-cleanup.md` for the
+evidence behind each):
+
+- Rotation angle is computed via PCA over the alpha mask's foreground
+  pixels, not `cv2.minAreaRect`. Testing on a synthetic pear-shaped mask
+  showed `minAreaRect`'s angle can be off by tens of degrees for
+  non-rectangular blobs.
+- `segment.py` pins rembg to the `u2net` model explicitly. rembg's own
+  default model (`bria-rmbg`) measured ~245s/image on CPU in testing —
+  impractical for batch use — versus ~2-4s/image for `u2net` with
+  comparable mask quality on our test photos.
+- An edge-decontamination step was added to `segment.py`
+  (`_decontaminate_edges`), beyond what was originally scoped. Without
+  it, compositing the cutout onto white left a visible gray halo around
+  the subject from antialiased edge pixels still carrying backdrop
+  color.
+
 ## Testing
 
 - Unit-level: feed synthetic/sample RGBA masks (round mask, pear-shaped
