@@ -2,7 +2,9 @@ from pathlib import Path
 
 import streamlit as st
 
-from gembg.cli import SUPPORTED_EXTENSIONS, process_one
+from gembg.cli import process_one
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
 st.set_page_config(page_title="Gem photo cleanup", page_icon=":material/diamond:")
 
@@ -13,11 +15,11 @@ st.caption(
 )
 
 with st.form("process_folder", border=True):
-    input_dir = st.text_input(
-        "Input folder", value="input", placeholder="Path to folder with source photos"
-    )
-    output_dir = st.text_input(
-        "Output folder", value="output", placeholder="Path to write cleaned photos into"
+    uploaded_files = st.file_uploader(
+        "Photo folder",
+        type=["jpg", "jpeg", "png"],
+        accept_multiple_files="directory",
+        help="Select a folder of gemstone photos from your device.",
     )
     with st.container(horizontal=True):
         canvas_size = st.number_input(
@@ -31,44 +33,32 @@ with st.form("process_folder", border=True):
 results = st.container()
 
 if submitted:
-    input_path = Path(input_dir)
-    output_path = Path(output_dir)
-
-    if not input_path.is_dir():
-        results.error(f"Input folder not found: {input_path}")
+    if not uploaded_files:
+        results.warning("Choose a folder with .jpg, .jpeg, or .png photos first.")
         st.stop()
 
-    source_files = sorted(
-        p
-        for p in input_path.iterdir()
-        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
-    )
-
-    if not source_files:
-        results.warning("No supported image files (.jpg, .jpeg, .png) found in that folder.")
-        st.stop()
-
-    output_path.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     with results:
         progress = st.progress(0.0, text="Starting…")
         needs_review = []
         previews = []
 
-        for i, source_file in enumerate(source_files):
+        for i, uploaded_file in enumerate(uploaded_files):
+            file_name = Path(uploaded_file.name).name
             progress.progress(
-                i / len(source_files),
-                text=f"Processing {source_file.name} ({i + 1}/{len(source_files)})",
+                i / len(uploaded_files),
+                text=f"Processing {file_name} ({i + 1}/{len(uploaded_files)})",
             )
-            output_image, review_flag = process_one(source_file, canvas_size, margin)
-            output_image.save(output_path / source_file.name, quality=95)
+            output_image, review_flag = process_one(uploaded_file, canvas_size, margin)
+            output_image.save(OUTPUT_DIR / file_name, quality=95)
             if review_flag:
-                needs_review.append(source_file.name)
-            previews.append((source_file.name, output_image))
+                needs_review.append(file_name)
+            previews.append((file_name, output_image))
 
         progress.progress(1.0, text="Done")
 
-        st.success(f"Processed {len(source_files)} photo(s) into `{output_path}`")
+        st.success(f"Processed {len(uploaded_files)} photo(s) into `{OUTPUT_DIR}`")
 
         if needs_review:
             st.warning(
@@ -84,4 +74,4 @@ if submitted:
             with columns[idx % 4]:
                 st.image(image, caption=name)
         if len(previews) > len(gallery):
-            st.caption(f"+{len(previews) - len(gallery)} more saved to {output_path}")
+            st.caption(f"+{len(previews) - len(gallery)} more saved to {OUTPUT_DIR}")
