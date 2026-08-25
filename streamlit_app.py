@@ -52,10 +52,15 @@ with st.form("process_folder", border=True):
             key=uploader_key,
         )
     with st.container(horizontal=True):
-        canvas_size = st.number_input(
-            "Canvas size (px)", min_value=200, max_value=4000, value=1600, step=100
-        )
+        custom_canvas = st.checkbox("Custom canvas size")
+        canvas_size = None
+        if custom_canvas:
+            canvas_size = st.number_input(
+                "Canvas size (px)", min_value=200, max_value=4000, value=1600, step=100
+            )
         margin = st.slider("Margin", min_value=0.0, max_value=0.3, value=0.08, step=0.01)
+    if not custom_canvas:
+        st.caption("Output size matches each photo's own size unless overridden above.")
     submitted = st.form_submit_button(
         "Process", icon=":material/play_arrow:", type="primary"
     )

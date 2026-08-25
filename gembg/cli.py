@@ -11,9 +11,18 @@ from gembg.pipeline.compose import to_white_canvas
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 
+def resolve_canvas_size(canvas_size, image_size):
+    """canvas_size=None means "match the source photo": use its larger
+    side so the output is never forced onto some unrelated fixed size
+    (e.g. a small product photo no longer gets dwarfed by a 1600px
+    white canvas)."""
+    return canvas_size if canvas_size else max(image_size)
+
+
 def process_one(source_path, canvas_size, margin):
     """Returns (output_image, needs_review: bool)."""
     rgb_image = Image.open(source_path).convert("RGB")
+    canvas_size = resolve_canvas_size(canvas_size, rgb_image.size)
     cutout = cut_out(rgb_image)
 
     coverage = mask_coverage_ratio(cutout)
@@ -69,7 +78,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Clean up gemstone product photos.")
     parser.add_argument("--input", required=True, help="Folder of source photos")
     parser.add_argument("--output", required=True, help="Folder to write cleaned photos into")
-    parser.add_argument("--canvas-size", type=int, default=1600)
+    parser.add_argument(
+        "--canvas-size",
+        type=int,
+        default=None,
+        help="Square canvas size in pixels. Default: match each source photo's size.",
+    )
     parser.add_argument("--margin", type=float, default=0.08)
     args = parser.parse_args(argv)
 
