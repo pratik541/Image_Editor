@@ -22,7 +22,9 @@ def process_one(source_path, canvas_size, margin):
     if not needs_review:
         angle = compute_rotation(cutout)
         if angle:
-            cutout = cutout.rotate(angle, expand=True, fillcolor=(0, 0, 0, 0))
+            cutout = cutout.rotate(
+                angle, resample=Image.BICUBIC, expand=True, fillcolor=(0, 0, 0, 0)
+            )
 
     output_image = to_white_canvas(cutout, canvas_size=canvas_size, margin=margin)
     return output_image, needs_review
