@@ -74,3 +74,27 @@ def test_cut_out_edges_have_no_background_halo_on_white():
         "composited edge pixels should not match the original gray "
         "backdrop color (halo)"
     )
+
+
+def test_cut_out_rgb_matches_source_exactly_even_at_partial_alpha():
+    # Regression test: rembg's own RGB output is alpha-premultiplied
+    # (raw_rgb == source_rgb * alpha), not straight color. An earlier
+    # version used that premultiplied RGB directly, which -- combined
+    # with our straight-alpha compositing -- double-multiplied edge
+    # pixels by their own alpha, darkening them (visible as a dark rim
+    # and dulled facets near edges, not just at the outer silhouette).
+    # cut_out must pair the model's alpha with the ORIGINAL source
+    # pixels, so RGB matches the source at every alpha level, not just
+    # where alpha is 0 or 255.
+    fixture = _make_gem_fixture()
+    cutout = cut_out(fixture)
+
+    src = np.array(fixture).astype(np.int16)
+    out = np.array(cutout)[..., :3].astype(np.int16)
+    alpha = np.array(cutout.split()[-1])
+
+    partial = (alpha > 20) & (alpha < 235)  # genuinely partial-alpha pixels
+    assert partial.sum() > 0, "expected some partial-alpha edge pixels"
+
+    diff = np.abs(src[partial] - out[partial])
+    assert diff.max() <= 2, f"RGB at partial-alpha pixels should match source, got max diff {diff.max()}"
