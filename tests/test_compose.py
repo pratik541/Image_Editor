@@ -44,3 +44,42 @@ def test_does_not_upscale_content_smaller_than_available_area():
     ys, xs = np.nonzero(non_white)
     assert xs.max() - xs.min() + 1 == 40  # native bbox width, not upscaled
     assert ys.max() - ys.min() + 1 == 30  # native bbox height, not upscaled
+
+
+def test_does_not_shrink_content_that_already_fits_the_canvas():
+    # A crop occupying MOST of the canvas (more than margin would
+    # normally allow) must still stay at native resolution rather than
+    # being shrunk to hit an exact margin ratio. Regression test: an
+    # earlier version shrank any crop bigger than canvas*(1-2*margin),
+    # which resamples (softens) a gem that already fits as-is.
+    canvas_size = 500
+    crop_size = 480  # occupies 96% of the canvas -- more than margin=0.08 allows (84%)
+    source = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+    offset = (canvas_size - crop_size) // 2
+    for x in range(offset, offset + crop_size):
+        for y in range(offset, offset + crop_size):
+            source.putpixel((x, y), (255, 0, 0, 255))
+
+    result = to_white_canvas(source, canvas_size=canvas_size, margin=0.08)
+
+    non_white = np.any(np.array(result) != 255, axis=-1)
+    ys, xs = np.nonzero(non_white)
+    assert xs.max() - xs.min() + 1 == crop_size
+    assert ys.max() - ys.min() + 1 == crop_size
+
+
+def test_shrinks_only_when_crop_overflows_the_canvas():
+    # A crop genuinely bigger than the canvas itself has no choice but
+    # to shrink; margin sets how much it shrinks by in that case.
+    source = Image.new("RGBA", (900, 900), (0, 0, 0, 0))
+    for x in range(50, 850):
+        for y in range(50, 850):
+            source.putpixel((x, y), (255, 0, 0, 255))  # 800x800 opaque crop
+
+    result = to_white_canvas(source, canvas_size=500, margin=0.08)
+
+    non_white = np.any(np.array(result) != 255, axis=-1)
+    ys, xs = np.nonzero(non_white)
+    expected = round(800 * (500 * 0.84 / 800))
+    assert abs((xs.max() - xs.min() + 1) - expected) <= 1
+    assert abs((ys.max() - ys.min() + 1) - expected) <= 1

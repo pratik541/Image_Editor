@@ -11,17 +11,22 @@ def to_white_canvas(rgba_image, canvas_size=1600, margin=0.08):
 
     cropped = rgba_image.crop(bbox)
 
-    available = canvas_size * (1 - 2 * margin)
-    # Cap at 1.0: shrinking to fit stays sharp, but enlarging past the
-    # source's native resolution only interpolates existing pixels and
-    # reads as blur -- confirmed by measurement (Laplacian-variance
-    # sharpness dropped >500x on a 9x upscale in testing). A gem that's
-    # smaller than the available area keeps its native size and gets
-    # more white margin instead of being blown up.
-    scale = min(available / cropped.width, available / cropped.height, 1.0)
+    # Never resample a gem that already fits on the canvas at its native
+    # resolution -- any resize (even shrinking) resamples pixels, which
+    # softens fine facet detail. `margin` is only a target when we must
+    # shrink anyway (crop bigger than the canvas itself); it must not
+    # force a shrink of a gem that would otherwise fit as-is. Confirmed
+    # by measurement: even a modest shrink-to-fit-margin on an
+    # already-fitting crop is enough to visibly soften facet edges.
+    if cropped.width <= canvas_size and cropped.height <= canvas_size:
+        scale = 1.0
+    else:
+        target = canvas_size * (1 - 2 * margin)
+        scale = min(target / cropped.width, target / cropped.height)
+
     new_width = max(1, round(cropped.width * scale))
     new_height = max(1, round(cropped.height * scale))
-    resized = cropped.resize((new_width, new_height), Image.LANCZOS)
+    resized = cropped if scale == 1.0 else cropped.resize((new_width, new_height), Image.LANCZOS)
 
     canvas = Image.new("RGBA", (canvas_size, canvas_size), (255, 255, 255, 255))
     paste_x = (canvas_size - new_width) // 2
