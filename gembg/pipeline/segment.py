@@ -134,7 +134,16 @@ def cut_out(rgb_image):
     alpha)."""
     alpha = np.array(_predict_alpha_mask(_get_session(), rgb_image))
 
-    kernel = np.ones((7, 7), np.uint8)
+    # 21x21, not 7x7: verified on a real photo that bright reflection
+    # facets whose color sits close to the gray backdrop (found two, at
+    # the crown's top-center and bottom-center) can locally dip the
+    # model's confidence right at the boundary, leaving small inward
+    # notches a 7x7 close doesn't bridge. 21x21 closes both cleanly
+    # (coverage unchanged to 4 decimal places -- confirms it's a
+    # targeted fix, not a broad shape change) without rounding a
+    # genuinely sharp point any more than 7x7 does (compared
+    # side-by-side on the same photo's marquise tip).
+    kernel = np.ones((21, 21), np.uint8)
     closed = cv2.morphologyEx(alpha, cv2.MORPH_CLOSE, kernel)
     refined = _refine_with_grabcut(closed, rgb_image)
     feathered = cv2.GaussianBlur(refined, (5, 5), 0)
