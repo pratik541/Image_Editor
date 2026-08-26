@@ -9,7 +9,7 @@ _SESSION = None
 def _get_session():
     global _SESSION
     if _SESSION is None:
-        _SESSION = new_session("u2net")
+        _SESSION = new_session("u2netp")
     return _SESSION
 
 
@@ -27,11 +27,14 @@ def cut_out(rgb_image):
     alpha mask with the ORIGINAL source pixels instead of rembg's RGB,
     which sidesteps the premultiplication entirely.
 
-    Uses the 'u2net' model explicitly rather than rembg's own default
-    ('bria-rmbg'), which measured ~245s/image on CPU in testing vs.
-    ~2-4s/image for u2net with comparable mask quality on our sample
-    photos -- bria-rmbg is a ~1GB model that's impractical for batch use
-    without a GPU."""
+    Uses the 'u2netp' model explicitly rather than rembg's own default
+    ('bria-rmbg', a ~1GB model that measured ~245s/image on CPU -- see
+    git history). 'u2netp' (~4.5MB) was chosen over the mid-size
+    'u2net' (~176MB) specifically for memory/bandwidth-constrained
+    hosting (e.g. Streamlit Community Cloud's free tier): comparable
+    mask quality and coverage on our test photos, ~2x faster inference,
+    and a download small enough to not risk stalling on a slow or
+    constrained network path."""
     result = remove(rgb_image, session=_get_session())
     alpha = np.array(result.split()[-1])
 
