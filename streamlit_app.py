@@ -4,8 +4,6 @@ from pathlib import Path
 
 import streamlit as st
 
-from gembg.cli import process_one
-
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 IMAGE_TYPES = ["jpg", "jpeg", "png"]
 
@@ -75,6 +73,9 @@ if submitted:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     with results:
+        with st.spinner("Loading the segmentation model (first run only)…"):
+            from gembg.cli import process_one  # deferred: heavy ML imports
+
         progress = st.progress(0.0, text="Starting…")
         needs_review = []
         previews = []
