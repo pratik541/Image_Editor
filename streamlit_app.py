@@ -155,7 +155,7 @@ if submitted:
 last_run = st.session_state.get("last_run")
 if last_run:
     with results:
-        st.success(f"Processed {last_run['total']} photo(s) into `{OUTPUT_DIR}`")
+        st.success(f"Processed {last_run['total']} photo(s)")
 
         if last_run["needs_review"]:
             st.warning(
@@ -187,4 +187,7 @@ if last_run:
             with columns[idx % 4]:
                 st.image(image, caption=name)
         if len(last_run["previews"]) > len(gallery):
-            st.caption(f"+{len(last_run['previews']) - len(gallery)} more saved to {OUTPUT_DIR}")
+            st.caption(
+                f"+{len(last_run['previews']) - len(gallery)} more — download the ZIP "
+                "above to get all of them"
+            )
