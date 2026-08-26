@@ -1,11 +1,20 @@
 import io
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 
 import streamlit as st
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 IMAGE_TYPES = ["jpg", "jpeg", "png"]
+IMPORT_TIMEOUT_SECONDS = 90
+PROCESS_TIMEOUT_SECONDS = 60
+
+
+def _load_process_one():
+    from gembg.cli import process_one  # deferred: heavy ML imports
+
+    return process_one
 
 st.set_page_config(page_title="Gem photo cleanup", page_icon=":material/diamond:")
 
@@ -73,8 +82,26 @@ if submitted:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     with results:
+        # Run the heavy import (and each image) in a worker thread with a
+        # hard timeout, so a stalled dependency (e.g. onnxruntime/numba
+        # failing to initialize on a constrained host) surfaces as a clear
+        # error instead of an infinite silent spinner.
+        executor = ThreadPoolExecutor(max_workers=1)
+
         with st.spinner("Loading the segmentation model (first run only)…"):
-            from gembg.cli import process_one  # deferred: heavy ML imports
+            try:
+                process_one = executor.submit(_load_process_one).result(
+                    timeout=IMPORT_TIMEOUT_SECONDS
+                )
+            except FutureTimeoutError:
+                st.error(
+                    f"Loading the background-removal model timed out after "
+                    f"{IMPORT_TIMEOUT_SECONDS}s. This usually means this hosting "
+                    "environment can't initialize one of its dependencies "
+                    "(onnxruntime, or numba/llvmlite pulled in by rembg) -- check "
+                    "the app's server logs for anything logged right around now."
+                )
+                st.stop()
 
         progress = st.progress(0.0, text="Starting…")
         needs_review = []
@@ -86,7 +113,14 @@ if submitted:
                 i / len(uploaded_files),
                 text=f"Processing {file_name} ({i + 1}/{len(uploaded_files)})",
             )
-            output_image, review_flag = process_one(uploaded_file, canvas_size, margin)
+            try:
+                output_image, review_flag = executor.submit(
+                    process_one, uploaded_file, canvas_size, margin
+                ).result(timeout=PROCESS_TIMEOUT_SECONDS)
+            except FutureTimeoutError:
+                st.warning(f"{file_name} timed out after {PROCESS_TIMEOUT_SECONDS}s -- skipped.")
+                needs_review.append(f"{file_name} (timed out)")
+                continue
             output_image.save(OUTPUT_DIR / file_name, quality=95)
             if review_flag:
                 needs_review.append(file_name)
