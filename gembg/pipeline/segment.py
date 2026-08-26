@@ -1,16 +1,72 @@
+from pathlib import Path
+
 import cv2
 import numpy as np
+import onnxruntime
+import pooch
 from PIL import Image
-from rembg import new_session, remove
+
+_MODEL_URL = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx"
+_MODEL_CHECKSUM = "md5:8e83ca70e441ab06c318d82300c84806"
+_MODEL_CACHE_DIR = Path.home() / ".gembg" / "models"
+_MODEL_INPUT_SIZE = (320, 320)
+_MODEL_MEAN = (0.485, 0.456, 0.406)
+_MODEL_STD = (0.229, 0.224, 0.225)
 
 _SESSION = None
 
 
 def _get_session():
+    """Load the u2netp ONNX model directly via onnxruntime, bypassing the
+    rembg *package* entirely (we only ever used its session-runner, never
+    its alpha-matting features).
+
+    rembg's top-level import pulls in pymatting, which pulls in numba --
+    a native JIT compiler that hung indefinitely (unrecoverable even with
+    a Python-level timeout, since a native/GIL-holding hang can't be
+    preempted from Python) on one hosting platform. onnxruntime + numpy +
+    PIL + pooch, used directly, provide the exact same inference this app
+    needs without that dependency chain. Preprocessing/postprocessing
+    below is copied from rembg's own U2netpSession, verified by reading
+    its source (rembg/sessions/base.py, u2netp.py)."""
     global _SESSION
     if _SESSION is None:
-        _SESSION = new_session("u2netp")
+        model_path = pooch.retrieve(
+            _MODEL_URL,
+            _MODEL_CHECKSUM,
+            fname="u2netp.onnx",
+            path=_MODEL_CACHE_DIR,
+            progressbar=False,
+        )
+        _SESSION = onnxruntime.InferenceSession(
+            model_path, providers=["CPUExecutionProvider"]
+        )
     return _SESSION
+
+
+def _predict_alpha_mask(session, rgb_image):
+    """Run u2netp on rgb_image and return a single-channel 'L' mask at the
+    image's own resolution."""
+    resized = rgb_image.convert("RGB").resize(_MODEL_INPUT_SIZE, Image.Resampling.LANCZOS)
+
+    array = np.array(resized) / max(np.array(resized).max(), 1e-6)
+    normalized = np.zeros_like(array, dtype=np.float32)
+    for channel in range(3):
+        normalized[:, :, channel] = (
+            array[:, :, channel] - _MODEL_MEAN[channel]
+        ) / _MODEL_STD[channel]
+    tensor = np.expand_dims(normalized.transpose((2, 0, 1)), 0).astype(np.float32)
+
+    input_name = session.get_inputs()[0].name
+    outputs = session.run(None, {input_name: tensor})
+
+    prediction = outputs[0][:, 0, :, :]
+    lo, hi = prediction.min(), prediction.max()
+    prediction = (prediction - lo) / (hi - lo)
+    prediction = np.squeeze(prediction)
+
+    mask = Image.fromarray((prediction.clip(0, 1) * 255).astype("uint8"), mode="L")
+    return mask.resize(rgb_image.size, Image.Resampling.LANCZOS)
 
 
 def cut_out(rgb_image):
@@ -18,25 +74,13 @@ def cut_out(rgb_image):
     small holes in the alpha mask (from bright facet reflections) are
     closed, and the alpha edge is softly feathered.
 
-    rembg's returned RGB is alpha-premultiplied (verified: raw_rgb ==
-    source_rgb * alpha to within uint8 rounding), not the straight
-    color our compositing (and an earlier decontamination step here)
-    assumed. Treating it as straight alpha double-multiplied edge
-    pixels by their own alpha, darkening them -- visible as a dark rim
-    and dulled facet color near edges. Fixed by pairing the model's
-    alpha mask with the ORIGINAL source pixels instead of rembg's RGB,
-    which sidesteps the premultiplication entirely.
-
-    Uses the 'u2netp' model explicitly rather than rembg's own default
-    ('bria-rmbg', a ~1GB model that measured ~245s/image on CPU -- see
-    git history). 'u2netp' (~4.5MB) was chosen over the mid-size
-    'u2net' (~176MB) specifically for memory/bandwidth-constrained
-    hosting (e.g. Streamlit Community Cloud's free tier): comparable
-    mask quality and coverage on our test photos, ~2x faster inference,
-    and a download small enough to not risk stalling on a slow or
-    constrained network path."""
-    result = remove(rgb_image, session=_get_session())
-    alpha = np.array(result.split()[-1])
+    Pairs the model's alpha mask directly with the ORIGINAL source
+    pixels (not a matted/recolored RGB), which is both simpler and
+    avoids a premultiplied-alpha bug rembg's own RGB output had (see
+    git history: rembg's raw_rgb == source_rgb * alpha, not straight
+    color -- verified darkened/dulled edges when treated as straight
+    alpha)."""
+    alpha = np.array(_predict_alpha_mask(_get_session(), rgb_image))
 
     kernel = np.ones((7, 7), np.uint8)
     closed = cv2.morphologyEx(alpha, cv2.MORPH_CLOSE, kernel)
