@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image
 
 from gembg.pipeline.segment import cut_out, mask_coverage_ratio
-from gembg.pipeline.straighten import compute_rotation
+from gembg.pipeline.straighten import compute_rotation, rotate_rgba
 from gembg.pipeline.compose import to_white_canvas
 
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
@@ -30,10 +30,7 @@ def process_one(source_path, canvas_size, margin):
 
     if not needs_review:
         angle = compute_rotation(cutout)
-        if angle:
-            cutout = cutout.rotate(
-                angle, resample=Image.BICUBIC, expand=True, fillcolor=(0, 0, 0, 0)
-            )
+        cutout = rotate_rgba(cutout, angle)
 
     output_image = to_white_canvas(cutout, canvas_size=canvas_size, margin=margin)
     return output_image, needs_review
