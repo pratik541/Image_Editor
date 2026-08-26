@@ -1,4 +1,6 @@
 import io
+import sys
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
@@ -11,9 +13,18 @@ IMPORT_TIMEOUT_SECONDS = 90
 PROCESS_TIMEOUT_SECONDS = 60
 
 
+def _log(message):
+    # flush=True so this shows up immediately in a hosting platform's log
+    # viewer even if stdout would otherwise be buffered.
+    print(f"[gembg-app] {message}", file=sys.stderr, flush=True)
+
+
 def _load_process_one():
+    _log("import: starting `from gembg.cli import process_one`")
+    t0 = time.time()
     from gembg.cli import process_one  # deferred: heavy ML imports
 
+    _log(f"import: finished in {time.time() - t0:.1f}s")
     return process_one
 
 st.set_page_config(page_title="Gem photo cleanup", page_icon=":material/diamond:")
@@ -75,6 +86,8 @@ with st.form("process_folder", border=True):
 results = st.container()
 
 if submitted:
+    _log(f"form submitted with {len(uploaded_files) if uploaded_files else 0} file(s)")
+
     if not uploaded_files:
         results.warning("Choose at least one .jpg, .jpeg, or .png photo first.")
         st.stop()
@@ -113,20 +126,25 @@ if submitted:
                 i / len(uploaded_files),
                 text=f"Processing {file_name} ({i + 1}/{len(uploaded_files)})",
             )
+            _log(f"processing ({i + 1}/{len(uploaded_files)}): starting {file_name}")
+            t0 = time.time()
             try:
                 output_image, review_flag = executor.submit(
                     process_one, uploaded_file, canvas_size, margin
                 ).result(timeout=PROCESS_TIMEOUT_SECONDS)
             except FutureTimeoutError:
+                _log(f"processing: TIMED OUT on {file_name} after {time.time() - t0:.1f}s")
                 st.warning(f"{file_name} timed out after {PROCESS_TIMEOUT_SECONDS}s -- skipped.")
                 needs_review.append(f"{file_name} (timed out)")
                 continue
+            _log(f"processing: finished {file_name} in {time.time() - t0:.1f}s")
             output_image.save(OUTPUT_DIR / file_name, quality=95)
             if review_flag:
                 needs_review.append(file_name)
             previews.append((file_name, output_image))
 
         progress.progress(1.0, text="Done")
+        _log("all files processed")
 
     st.session_state["last_run"] = {
         "total": len(uploaded_files),
