@@ -37,6 +37,47 @@ def _make_gem_fixture(size=600):
     return img.filter(ImageFilter.GaussianBlur(0.4))
 
 
+def _make_marquise_fixture(size=520):
+    """A synthetic sharp-pointed (marquise-like) gem, to check the
+    output stays genuinely pointed rather than getting rounded off."""
+    img = Image.new("RGB", (size, size), (235, 235, 235))
+    draw = ImageDraw.Draw(img)
+    cx = size // 2
+    top, bottom = 40, size - 40
+    pts = [
+        (cx, top),
+        (cx + int(size * 0.22), size // 2),
+        (cx, bottom),
+        (cx - int(size * 0.22), size // 2),
+    ]
+    draw.polygon(pts, fill=(10, 80, 40))
+    for i in range(4):
+        a, b = pts[i], pts[(i + 1) % 4]
+        shade = 20 + i * 20
+        draw.polygon([a, b, (cx, size // 2)], fill=(shade, 110 + shade, 50 + shade // 2))
+    return img.filter(ImageFilter.GaussianBlur(0.4))
+
+
+def test_cut_out_keeps_sharp_points_sharp():
+    # Regression test: u2netp's fixed 320x320 internal resolution rounds
+    # off a genuinely sharp point (e.g. a marquise cut's tip) in its own
+    # raw prediction -- verified visually on a real marquise emerald
+    # photo. cut_out must refine the mask against the full-resolution
+    # source (via GrabCut) to recover it, rather than leaving the
+    # model's blunted low-res tip as the final output.
+    fixture = _make_marquise_fixture()
+    cutout = cut_out(fixture)
+    alpha = np.array(cutout.split()[-1])
+
+    mask = alpha > 127
+    top_row = np.where(mask.any(axis=1))[0].min()
+
+    # 15px below the true drawn apex, a genuinely sharp point should
+    # still be narrow. A rounded/blunted tip is much wider here.
+    row_width = np.count_nonzero(mask[top_row + 15])
+    assert row_width < 25, f"tip looks blunted: {row_width}px wide 15px below the apex"
+
+
 def test_cut_out_removes_background_and_shadow():
     fixture = _make_gem_fixture()
     cutout = cut_out(fixture)
