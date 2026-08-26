@@ -10,7 +10,12 @@ import streamlit as st
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 IMAGE_TYPES = ["jpg", "jpeg", "png"]
 IMPORT_TIMEOUT_SECONDS = 90
-PROCESS_TIMEOUT_SECONDS = 60
+# The segmentation model (BiRefNet-general-lite) trades speed for edge
+# quality: ~85s/image measured on CPU locally, plus up to ~1min for the
+# one-time 224MB download on the first image. A slower hosted CPU could
+# be several times that, so this is deliberately generous rather than a
+# tight bound -- the goal is "eventually errors out" not "fast".
+PROCESS_TIMEOUT_SECONDS = 600
 
 
 def _log(message):
@@ -79,6 +84,10 @@ with st.form("process_folder", border=True):
         margin = st.slider("Margin", min_value=0.0, max_value=0.3, value=0.08, step=0.01)
     if not custom_canvas:
         st.caption("Output size matches each photo's own size unless overridden above.")
+    st.caption(
+        "Uses a high-precision model for sharp edges -- roughly a minute or more "
+        "per photo. This is expected, not a hang."
+    )
     submitted = st.form_submit_button(
         "Process", icon=":material/play_arrow:", type="primary"
     )
@@ -110,9 +119,8 @@ if submitted:
                 st.error(
                     f"Loading the background-removal model timed out after "
                     f"{IMPORT_TIMEOUT_SECONDS}s. This usually means this hosting "
-                    "environment can't initialize one of its dependencies "
-                    "(onnxruntime, or numba/llvmlite pulled in by rembg) -- check "
-                    "the app's server logs for anything logged right around now."
+                    "environment can't initialize onnxruntime -- check the app's "
+                    "server logs for anything logged right around now."
                 )
                 st.stop()
 

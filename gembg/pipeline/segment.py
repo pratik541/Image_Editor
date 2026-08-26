@@ -6,10 +6,13 @@ import onnxruntime
 import pooch
 from PIL import Image
 
-_MODEL_URL = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx"
-_MODEL_CHECKSUM = "md5:8e83ca70e441ab06c318d82300c84806"
+_MODEL_URL = (
+    "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+    "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx"
+)
+_MODEL_CHECKSUM = "md5:4fab47adc4ff364be1713e97b7e66334"
 _MODEL_CACHE_DIR = Path.home() / ".gembg" / "models"
-_MODEL_INPUT_SIZE = (320, 320)
+_MODEL_INPUT_SIZE = (1024, 1024)
 _MODEL_MEAN = (0.485, 0.456, 0.406)
 _MODEL_STD = (0.229, 0.224, 0.225)
 
@@ -17,9 +20,9 @@ _SESSION = None
 
 
 def _get_session():
-    """Load the u2netp ONNX model directly via onnxruntime, bypassing the
-    rembg *package* entirely (we only ever used its session-runner, never
-    its alpha-matting features).
+    """Load the BiRefNet-general-lite ONNX model directly via onnxruntime,
+    bypassing the rembg *package* entirely (we only ever used its
+    session-runner, never its alpha-matting features).
 
     rembg's top-level import pulls in pymatting, which pulls in numba --
     a native JIT compiler that hung indefinitely (unrecoverable even with
@@ -27,14 +30,21 @@ def _get_session():
     preempted from Python) on one hosting platform. onnxruntime + numpy +
     PIL + pooch, used directly, provide the exact same inference this app
     needs without that dependency chain. Preprocessing/postprocessing
-    below is copied from rembg's own U2netpSession, verified by reading
-    its source (rembg/sessions/base.py, u2netp.py)."""
+    below is copied from rembg's own BiRefNetSessionGeneral, verified by
+    reading its source (rembg/sessions/base.py, birefnet_general.py).
+
+    Chosen over u2netp for edge precision: this model runs at 1024x1024
+    internally vs u2netp's 320x320, so a genuinely sharp point (e.g. a
+    marquise cut's tip) survives the model's own prediction instead of
+    needing GrabCut to recover it after the fact. Trade-off, deliberately
+    accepted: ~85s/image on CPU measured locally (vs ~1s for u2netp) --
+    likely several minutes on a slower hosted CPU."""
     global _SESSION
     if _SESSION is None:
         model_path = pooch.retrieve(
             _MODEL_URL,
             _MODEL_CHECKSUM,
-            fname="u2netp.onnx",
+            fname="birefnet-general-lite.onnx",
             path=_MODEL_CACHE_DIR,
             progressbar=False,
         )
@@ -44,9 +54,13 @@ def _get_session():
     return _SESSION
 
 
+def _sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+
+
 def _predict_alpha_mask(session, rgb_image):
-    """Run u2netp on rgb_image and return a single-channel 'L' mask at the
-    image's own resolution."""
+    """Run the model on rgb_image and return a single-channel 'L' mask at
+    the image's own resolution."""
     resized = rgb_image.convert("RGB").resize(_MODEL_INPUT_SIZE, Image.Resampling.LANCZOS)
 
     array = np.array(resized) / max(np.array(resized).max(), 1e-6)
@@ -60,7 +74,7 @@ def _predict_alpha_mask(session, rgb_image):
     input_name = session.get_inputs()[0].name
     outputs = session.run(None, {input_name: tensor})
 
-    prediction = outputs[0][:, 0, :, :]
+    prediction = _sigmoid(outputs[0][:, 0, :, :])
     lo, hi = prediction.min(), prediction.max()
     prediction = (prediction - lo) / (hi - lo)
     prediction = np.squeeze(prediction)
@@ -73,15 +87,14 @@ def _refine_with_grabcut(alpha, rgb_image):
     """Sharpen the model's mask against the source image's actual
     full-resolution color data.
 
-    u2netp's ONNX export has a hardcoded 320x320 input -- verified it
-    cannot run at higher resolution (onnxruntime rejects any other
-    shape) -- so a genuinely sharp point (e.g. a marquise cut's tip)
-    gets rounded off in the model's own low-resolution prediction, not
-    just by our own close/feather. GrabCut, seeded with this mask as a
-    trimap, re-derives the boundary from the real image at full
-    resolution. Verified on two test photos: recovers a visibly
-    sharper point, coverage barely shifts (<0.1%), and no new holes
-    appear elsewhere in the mask.
+    Kept as a cheap (~0.6s) extra safety net even after switching to a
+    higher-resolution model (1024x1024): still a hardcoded input size
+    smaller than most source photos, so a genuinely sharp point can
+    still lose a little precision in the model's own prediction.
+    GrabCut, seeded with this mask as a trimap, re-derives the boundary
+    from the real image at full resolution. Verified on two test
+    photos: recovers a visibly sharper point, coverage barely shifts
+    (<0.1%), and no new holes appear elsewhere in the mask.
 
     Falls back to the unrefined mask if GrabCut fails on a degenerate
     trimap (e.g. an almost entirely empty or full mask), rather than
