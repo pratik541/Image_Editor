@@ -10,12 +10,15 @@ import streamlit as st
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 IMAGE_TYPES = ["jpg", "jpeg", "png"]
 IMPORT_TIMEOUT_SECONDS = 90
-# The segmentation model (BiRefNet-general-lite) trades speed for edge
-# quality: ~85s/image measured on CPU locally, plus up to ~1min for the
-# one-time 224MB download on the first image. A slower hosted CPU could
-# be several times that, so this is deliberately generous rather than a
-# tight bound -- the goal is "eventually errors out" not "fast".
-PROCESS_TIMEOUT_SECONDS = 600
+PROCESS_TIMEOUT_SECONDS = 60
+# Forced to "fast" (u2netp) rather than the pipeline's own "quality"
+# default (BiRefNet): measured BiRefNet's peak RAM during inference at
+# ~3.9-5GB, which gets silently OOM-killed on this app's ~1GB-RAM free
+# hosting tier (confirmed on the user's actual deployment -- the process
+# just stops with no traceback right as the model starts loading).
+# u2netp needs nowhere near that. Revisit if this app ever moves to a
+# host with more memory.
+MODEL = "fast"
 
 
 def _log(message):
@@ -84,10 +87,6 @@ with st.form("process_folder", border=True):
         margin = st.slider("Margin", min_value=0.0, max_value=0.3, value=0.08, step=0.01)
     if not custom_canvas:
         st.caption("Output size matches each photo's own size unless overridden above.")
-    st.caption(
-        "Uses a high-precision model for sharp edges -- roughly a minute or more "
-        "per photo. This is expected, not a hang."
-    )
     submitted = st.form_submit_button(
         "Process", icon=":material/play_arrow:", type="primary"
     )
@@ -138,7 +137,7 @@ if submitted:
             t0 = time.time()
             try:
                 output_image, review_flag = executor.submit(
-                    process_one, uploaded_file, canvas_size, margin
+                    process_one, uploaded_file, canvas_size, margin, MODEL
                 ).result(timeout=PROCESS_TIMEOUT_SECONDS)
             except FutureTimeoutError:
                 _log(f"processing: TIMED OUT on {file_name} after {time.time() - t0:.1f}s")
