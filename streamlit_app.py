@@ -74,16 +74,6 @@ with st.form("process_folder", border=True):
             help="Select a folder of gemstone photos from your device.",
             key=uploader_key,
         )
-    quality_mode = st.segmented_control(
-        "Quality",
-        ["Fast", "Quality"],
-        default="Quality",
-        required=True,
-        help=(
-            "Quality: sharper edges, ~1 minute or more per photo. "
-            "Fast: ~1 second per photo, edges noticeably softer -- good for a quick preview."
-        ),
-    )
     with st.container(horizontal=True):
         custom_canvas = st.checkbox("Custom canvas size")
         canvas_size = None
@@ -94,11 +84,10 @@ with st.form("process_folder", border=True):
         margin = st.slider("Margin", min_value=0.0, max_value=0.3, value=0.08, step=0.01)
     if not custom_canvas:
         st.caption("Output size matches each photo's own size unless overridden above.")
-    if quality_mode == "Quality":
-        st.caption(
-            "Uses a high-precision model for sharp edges -- roughly a minute or more "
-            "per photo. This is expected, not a hang."
-        )
+    st.caption(
+        "Uses a high-precision model for sharp edges -- roughly a minute or more "
+        "per photo. This is expected, not a hang."
+    )
     submitted = st.form_submit_button(
         "Process", icon=":material/play_arrow:", type="primary"
     )
@@ -147,10 +136,9 @@ if submitted:
             )
             _log(f"processing ({i + 1}/{len(uploaded_files)}): starting {file_name}")
             t0 = time.time()
-            model = "fast" if quality_mode == "Fast" else "quality"
             try:
                 output_image, review_flag = executor.submit(
-                    process_one, uploaded_file, canvas_size, margin, model
+                    process_one, uploaded_file, canvas_size, margin
                 ).result(timeout=PROCESS_TIMEOUT_SECONDS)
             except FutureTimeoutError:
                 _log(f"processing: TIMED OUT on {file_name} after {time.time() - t0:.1f}s")
