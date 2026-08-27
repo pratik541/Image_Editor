@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from gembg.pipeline.segment import cut_out, mask_coverage_ratio
+from gembg.pipeline.segment import DEFAULT_MODEL, cut_out, mask_coverage_ratio
 from gembg.pipeline.straighten import compute_rotation, rotate_rgba
 from gembg.pipeline.compose import to_white_canvas
 
@@ -19,11 +19,11 @@ def resolve_canvas_size(canvas_size, image_size):
     return canvas_size if canvas_size else max(image_size)
 
 
-def process_one(source_path, canvas_size, margin):
+def process_one(source_path, canvas_size, margin, model=DEFAULT_MODEL):
     """Returns (output_image, needs_review: bool)."""
     rgb_image = Image.open(source_path).convert("RGB")
     canvas_size = resolve_canvas_size(canvas_size, rgb_image.size)
-    cutout = cut_out(rgb_image)
+    cutout = cut_out(rgb_image, model=model)
 
     coverage = mask_coverage_ratio(cutout)
     needs_review = coverage < 0.01 or coverage > 0.95
@@ -36,7 +36,7 @@ def process_one(source_path, canvas_size, margin):
     return output_image, needs_review
 
 
-def run(input_dir, output_dir, canvas_size, margin):
+def run(input_dir, output_dir, canvas_size, margin, model=DEFAULT_MODEL):
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -54,7 +54,7 @@ def run(input_dir, output_dir, canvas_size, margin):
             skipped_files.append(source_path.name)
             continue
 
-        output_image, needs_review = process_one(source_path, canvas_size, margin)
+        output_image, needs_review = process_one(source_path, canvas_size, margin, model=model)
         output_path = output_dir / source_path.name
         output_image.save(output_path, quality=95)
         processed += 1
@@ -82,9 +82,15 @@ def main(argv=None):
         help="Square canvas size in pixels. Default: match each source photo's size.",
     )
     parser.add_argument("--margin", type=float, default=0.08)
+    parser.add_argument(
+        "--model",
+        choices=["fast", "quality"],
+        default=DEFAULT_MODEL,
+        help="'quality' (default): sharp edges, ~75-85s/image. 'fast': ~1s/image, softer edges.",
+    )
     args = parser.parse_args(argv)
 
-    run(args.input, args.output, args.canvas_size, args.margin)
+    run(args.input, args.output, args.canvas_size, args.margin, model=args.model)
 
 
 if __name__ == "__main__":

@@ -6,21 +6,42 @@ import onnxruntime
 import pooch
 from PIL import Image
 
-_MODEL_URL = (
-    "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
-    "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx"
-)
-_MODEL_CHECKSUM = "md5:4fab47adc4ff364be1713e97b7e66334"
+# Two models, deliberately kept as a user-facing choice rather than one
+# default: BiRefNet is far sharper (runs at 1024x1024 internally) but
+# measured ~75-85s/image on CPU; u2netp is ~1s/image but visibly
+# blunter/softer at edges -- confirmed side-by-side on the same real
+# photo, even with every other fix in this file already applied. There
+# is no configuration that closes this gap; it's a genuine trade-off.
+MODELS = {
+    "fast": {
+        "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx",
+        "checksum": "md5:8e83ca70e441ab06c318d82300c84806",
+        "filename": "u2netp.onnx",
+        "input_size": (320, 320),
+        "use_sigmoid": False,
+    },
+    "quality": {
+        "url": (
+            "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx"
+        ),
+        "checksum": "md5:4fab47adc4ff364be1713e97b7e66334",
+        "filename": "birefnet-general-lite.onnx",
+        "input_size": (1024, 1024),
+        "use_sigmoid": True,
+    },
+}
+DEFAULT_MODEL = "quality"
+
 _MODEL_CACHE_DIR = Path.home() / ".gembg" / "models"
-_MODEL_INPUT_SIZE = (1024, 1024)
 _MODEL_MEAN = (0.485, 0.456, 0.406)
 _MODEL_STD = (0.229, 0.224, 0.225)
 
-_SESSION = None
+_SESSIONS = {}
 
 
-def _get_session():
-    """Load the BiRefNet-general-lite ONNX model directly via onnxruntime,
+def _get_session(model):
+    """Load the given model's ONNX file directly via onnxruntime,
     bypassing the rembg *package* entirely (we only ever used its
     session-runner, never its alpha-matting features).
 
@@ -30,38 +51,34 @@ def _get_session():
     preempted from Python) on one hosting platform. onnxruntime + numpy +
     PIL + pooch, used directly, provide the exact same inference this app
     needs without that dependency chain. Preprocessing/postprocessing
-    below is copied from rembg's own BiRefNetSessionGeneral, verified by
-    reading its source (rembg/sessions/base.py, birefnet_general.py).
-
-    Chosen over u2netp for edge precision: this model runs at 1024x1024
-    internally vs u2netp's 320x320, so a genuinely sharp point (e.g. a
-    marquise cut's tip) survives the model's own prediction instead of
-    needing GrabCut to recover it after the fact. Trade-off, deliberately
-    accepted: ~85s/image on CPU measured locally (vs ~1s for u2netp) --
-    likely several minutes on a slower hosted CPU."""
-    global _SESSION
-    if _SESSION is None:
+    below is copied from rembg's own session classes, verified by
+    reading their source (rembg/sessions/base.py, u2netp.py,
+    birefnet_general.py)."""
+    if model not in _SESSIONS:
+        config = MODELS[model]
         model_path = pooch.retrieve(
-            _MODEL_URL,
-            _MODEL_CHECKSUM,
-            fname="birefnet-general-lite.onnx",
+            config["url"],
+            config["checksum"],
+            fname=config["filename"],
             path=_MODEL_CACHE_DIR,
             progressbar=False,
         )
-        _SESSION = onnxruntime.InferenceSession(
+        _SESSIONS[model] = onnxruntime.InferenceSession(
             model_path, providers=["CPUExecutionProvider"]
         )
-    return _SESSION
+    return _SESSIONS[model]
 
 
 def _sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
 
-def _predict_alpha_mask(session, rgb_image):
+def _predict_alpha_mask(session, rgb_image, config):
     """Run the model on rgb_image and return a single-channel 'L' mask at
     the image's own resolution."""
-    resized = rgb_image.convert("RGB").resize(_MODEL_INPUT_SIZE, Image.Resampling.LANCZOS)
+    resized = rgb_image.convert("RGB").resize(
+        config["input_size"], Image.Resampling.LANCZOS
+    )
 
     array = np.array(resized) / max(np.array(resized).max(), 1e-6)
     normalized = np.zeros_like(array, dtype=np.float32)
@@ -74,7 +91,9 @@ def _predict_alpha_mask(session, rgb_image):
     input_name = session.get_inputs()[0].name
     outputs = session.run(None, {input_name: tensor})
 
-    prediction = _sigmoid(outputs[0][:, 0, :, :])
+    prediction = outputs[0][:, 0, :, :]
+    if config["use_sigmoid"]:
+        prediction = _sigmoid(prediction)
     lo, hi = prediction.min(), prediction.max()
     prediction = (prediction - lo) / (hi - lo)
     prediction = np.squeeze(prediction)
@@ -87,14 +106,14 @@ def _refine_with_grabcut(alpha, rgb_image):
     """Sharpen the model's mask against the source image's actual
     full-resolution color data.
 
-    Kept as a cheap (~0.6s) extra safety net even after switching to a
-    higher-resolution model (1024x1024): still a hardcoded input size
-    smaller than most source photos, so a genuinely sharp point can
-    still lose a little precision in the model's own prediction.
-    GrabCut, seeded with this mask as a trimap, re-derives the boundary
-    from the real image at full resolution. Verified on two test
-    photos: recovers a visibly sharper point, coverage barely shifts
-    (<0.1%), and no new holes appear elsewhere in the mask.
+    Kept as a cheap (~0.6s) extra safety net even for the higher-
+    resolution model (1024x1024): still a hardcoded input size smaller
+    than most source photos, so a genuinely sharp point can still lose
+    a little precision in the model's own prediction. GrabCut, seeded
+    with this mask as a trimap, re-derives the boundary from the real
+    image at full resolution. Verified on two test photos: recovers a
+    visibly sharper point, coverage barely shifts (<0.1%), and no new
+    holes appear elsewhere in the mask.
 
     Falls back to the unrefined mask if GrabCut fails on a degenerate
     trimap (e.g. an almost entirely empty or full mask), rather than
@@ -120,11 +139,15 @@ def _refine_with_grabcut(alpha, rgb_image):
     return np.where(is_foreground, 255, 0).astype(np.uint8)
 
 
-def cut_out(rgb_image):
+def cut_out(rgb_image, model=DEFAULT_MODEL):
     """Run background/shadow removal and return a cleaned RGBA cutout:
     small holes in the alpha mask (from bright facet reflections) are
     closed, the boundary is sharpened against the full-resolution
     source image, and the alpha edge is softly feathered.
+
+    model: "quality" (default, BiRefNet-general-lite, ~75-85s/image on
+    CPU, sharp edges) or "fast" (u2netp, ~1s/image, visibly softer
+    edges) -- see MODELS above.
 
     Pairs the model's alpha mask directly with the ORIGINAL source
     pixels (not a matted/recolored RGB), which is both simpler and
@@ -132,7 +155,8 @@ def cut_out(rgb_image):
     git history: rembg's raw_rgb == source_rgb * alpha, not straight
     color -- verified darkened/dulled edges when treated as straight
     alpha)."""
-    alpha = np.array(_predict_alpha_mask(_get_session(), rgb_image))
+    config = MODELS[model]
+    alpha = np.array(_predict_alpha_mask(_get_session(model), rgb_image, config))
 
     # 21x21, not 7x7: verified on a real photo that bright reflection
     # facets whose color sits close to the gray backdrop (found two, at

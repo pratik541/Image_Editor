@@ -3,9 +3,11 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from gembg.pipeline.segment import cut_out, mask_coverage_ratio
 
-# These tests exercise the real 'u2net' model via rembg. The first run
-# on a machine downloads it (~176MB, one-time, cached under
-# ~/.rembg/models/u2net); subsequent runs are fast (a few seconds).
+# These tests exercise the real "quality" model (BiRefNet-general-lite)
+# by default. The first run on a machine downloads it (~224MB, one-time,
+# cached under ~/.gembg/models); subsequent runs reuse the cached
+# session, but each test still pays real inference time (~75-85s/image
+# measured on CPU), so this file's tests are slow by design.
 
 
 def _make_gem_fixture(size=600):
@@ -139,3 +141,19 @@ def test_cut_out_rgb_matches_source_exactly_even_at_partial_alpha():
 
     diff = np.abs(src[partial] - out[partial])
     assert diff.max() <= 2, f"RGB at partial-alpha pixels should match source, got max diff {diff.max()}"
+
+
+def test_cut_out_fast_model_produces_a_usable_mask():
+    # Only a basic sanity check for the "fast" (u2netp) path -- the
+    # detailed correctness properties above are already covered against
+    # the default model and don't depend on which model produced the
+    # mask, so this deliberately doesn't repeat them all against a
+    # second real model (each real-inference test is expensive).
+    fixture = _make_gem_fixture()
+    cutout = cut_out(fixture, model="fast")
+
+    assert cutout.mode == "RGBA"
+    assert cutout.size == fixture.size
+
+    coverage = mask_coverage_ratio(cutout)
+    assert 0.05 < coverage < 0.5, f"unexpected foreground coverage: {coverage}"
