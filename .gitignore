@@ -4,3 +4,5 @@ __pycache__/
 .claude/
 input/
 output/
+.venv/
+.ipynb_checkpoints/
